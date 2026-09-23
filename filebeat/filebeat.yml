@@ -1,0 +1,41 @@
+filebeat.inputs:
+  - type: container
+    enabled: true
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    stream: stdout
+
+processors:
+  # Attach container name, image, and labels to every event.
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+
+  # Our app writes JSON. This turns the JSON string sitting in the
+  # "message" field into real, searchable top-level fields
+  # (request_id, status_code, duration_ms, ...).
+  - decode_json_fields:
+      fields: ["message"]
+      target: ""
+      overwrite_keys: true
+      add_error_key: true
+
+  # Drop the noisy logs from the monitoring stack itself so Kibana
+  # only shows your application. Comment this out if you want everything.
+  - drop_event:
+      when:
+        not:
+          contains:
+            container.name: "app"
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  index: "app-logs-%{+yyyy.MM.dd}"
+
+# Index lifecycle management is disabled so the custom index name above
+# is actually used. Keeps day-one debugging simple.
+setup.ilm.enabled: false
+setup.template.name: "app-logs"
+setup.template.pattern: "app-logs-*"
+
+logging.level: info
+logging.to_files: false
