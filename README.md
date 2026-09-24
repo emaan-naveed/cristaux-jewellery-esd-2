@@ -4,7 +4,7 @@ An enterprise luxury jewellery e-commerce application built with **FastAPI**, **
 
 ---
 
-## 🌟 Architecture & Services Summary
+##  Architecture & Services Summary
 
 | Service | URL / Port | Description & Purpose |
 |---|---|---|
@@ -19,14 +19,14 @@ An enterprise luxury jewellery e-commerce application built with **FastAPI**, **
 
 ---
 
-## 🚀 Prerequisites
+## Prerequisites
 
 - **Docker Desktop** (with Compose v2)
 - At least **4 GB Memory** allocated to Docker (required for Elasticsearch).
 
 ---
 
-## ⚡ How to Start, Test & Run
+## How to Start, Test & Run
 
 ### 1. Launch Containers
 ```bash
@@ -47,7 +47,7 @@ py -3 seed_traffic.py
 
 ---
 
-## 🔬 Part E Experiments
+## Part E Experiments
 
 ### 1. Latency Anomaly Test (Fault Injection)
 - **Trigger Anomaly (500ms artificial delay)**:
@@ -69,7 +69,7 @@ py -3 seed_traffic.py
 
 ---
 
-## 🧹 Cleanup & Teardown
+##  Cleanup & Teardown
 
 Stop containers while keeping data:
 ```bash
