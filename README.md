@@ -54,7 +54,6 @@ py -3 seed_traffic.py
   ```bash
   curl -X POST http://localhost:8000/admin/fault -H "Content-Type: application/json" -d "{\"delay_ms\": 500}"
   ```
-  *(Or click "Trigger Part E1 Anomaly" directly on the http://localhost:8000 homepage)*
 - **Observe**: Notice the p95 latency spike in Grafana and slow duration logs in Kibana.
 - **Reset Anomaly**:
   ```bash

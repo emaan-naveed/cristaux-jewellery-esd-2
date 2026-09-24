@@ -271,12 +271,15 @@ async def home_page():
         <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Montserrat:wght@300;400;500;600&display=swap" rel="stylesheet">
         <style>
             :root {
-                --gold: #D4AF37;
-                --gold-light: #F4E8C1;
-                --dark: #0F0F11;
-                --card-bg: #16161A;
-                --text-light: #E6E6E6;
-                --text-muted: #999999;
+                --purple-primary: #6B21A8;
+                --purple-dark: #3B0764;
+                --purple-light: #A855F7;
+                --purple-soft: #EDE9FE;
+                --gold-accent: #F59E0B;
+                --dark: #0F0A1A;
+                --card-bg: #1E152A;
+                --text-light: #F3E8FF;
+                --text-muted: #C084FC;
             }
             * { box-sizing: border-box; margin: 0; padding: 0; }
             body {
@@ -286,8 +289,8 @@ async def home_page():
                 line-height: 1.6;
             }
             header {
-                background: rgba(15, 15, 17, 0.95);
-                border-bottom: 1px solid rgba(212, 175, 55, 0.3);
+                background: rgba(15, 10, 26, 0.95);
+                border-bottom: 1px solid rgba(168, 85, 247, 0.3);
                 padding: 1.5rem 3rem;
                 display: flex;
                 justify-content: space-between;
@@ -301,7 +304,7 @@ async def home_page():
                 font-family: 'Cinzel', serif;
                 font-size: 1.8rem;
                 letter-spacing: 4px;
-                color: var(--gold);
+                color: var(--purple-light);
                 text-decoration: none;
                 text-transform: uppercase;
                 font-weight: 700;
@@ -314,17 +317,17 @@ async def home_page():
                 letter-spacing: 1px;
                 transition: color 0.3s;
             }
-            .nav-links a:hover { color: var(--gold); }
+            .nav-links a:hover { color: var(--purple-light); }
             
             .hero {
                 text-align: center;
                 padding: 5rem 2rem 3rem;
-                background: linear-gradient(180deg, rgba(212,175,55,0.05) 0%, rgba(15,15,17,1) 100%);
+                background: linear-gradient(180deg, rgba(107, 33, 168, 0.35) 0%, rgba(15, 10, 26, 1) 100%);
             }
             .hero h1 {
                 font-family: 'Cinzel', serif;
                 font-size: 3rem;
-                color: var(--gold-light);
+                color: var(--purple-soft);
                 margin-bottom: 1rem;
                 letter-spacing: 2px;
             }
@@ -339,7 +342,7 @@ async def home_page():
             .section-title {
                 font-family: 'Cinzel', serif;
                 font-size: 1.8rem;
-                color: var(--gold);
+                color: var(--purple-light);
                 margin-bottom: 2rem;
                 text-align: center;
                 letter-spacing: 2px;
@@ -352,14 +355,15 @@ async def home_page():
             }
             .card {
                 background-color: var(--card-bg);
-                border: 1px solid rgba(212, 175, 55, 0.15);
+                border: 1px solid rgba(168, 85, 247, 0.25);
                 border-radius: 8px;
                 overflow: hidden;
                 transition: transform 0.3s, border-color 0.3s;
             }
             .card:hover {
                 transform: translateY(-5px);
-                border-color: var(--gold);
+                border-color: var(--purple-light);
+                box-shadow: 0 8px 25px rgba(168, 85, 247, 0.2);
             }
             .card-img {
                 width: 100%;
@@ -370,7 +374,7 @@ async def home_page():
             .card-title {
                 font-family: 'Cinzel', serif;
                 font-size: 1.2rem;
-                color: var(--gold-light);
+                color: var(--purple-soft);
                 margin-bottom: 0.5rem;
             }
             .card-desc {
@@ -389,11 +393,11 @@ async def home_page():
             .price {
                 font-size: 1.2rem;
                 font-weight: 600;
-                color: var(--gold);
+                color: var(--purple-light);
             }
             .btn {
-                background: linear-gradient(135deg, #D4AF37 0%, #AA820A 100%);
-                color: #000;
+                background: linear-gradient(135deg, #A855F7 0%, #6B21A8 100%);
+                color: #FFFFFF;
                 border: none;
                 padding: 0.6rem 1.2rem;
                 border-radius: 4px;
@@ -402,30 +406,30 @@ async def home_page():
                 cursor: pointer;
                 letter-spacing: 1px;
                 text-transform: uppercase;
-                transition: opacity 0.3s;
+                transition: opacity 0.3s, transform 0.2s;
             }
-            .btn:hover { opacity: 0.9; }
+            .btn:hover { opacity: 0.95; transform: scale(1.02); }
 
             .obs-panel {
                 margin-top: 4rem;
-                background: rgba(212, 175, 55, 0.05);
-                border: 1px solid var(--gold);
+                background: rgba(107, 33, 168, 0.15);
+                border: 1px solid var(--purple-light);
                 border-radius: 8px;
                 padding: 2rem;
                 text-align: center;
             }
-            .obs-panel h3 { font-family: 'Cinzel', serif; color: var(--gold); margin-bottom: 1rem; }
+            .obs-panel h3 { font-family: 'Cinzel', serif; color: var(--purple-light); margin-bottom: 1rem; }
             .obs-links { display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap; margin-top: 1rem; }
             .obs-links a {
-                color: var(--gold-light);
+                color: var(--purple-soft);
                 text-decoration: none;
-                background: #222;
+                background: #2D1B4E;
                 padding: 0.6rem 1.2rem;
                 border-radius: 4px;
-                border: 1px solid rgba(212, 175, 55, 0.3);
+                border: 1px solid rgba(168, 85, 247, 0.4);
                 font-size: 0.85rem;
             }
-            .obs-links a:hover { background: var(--gold); color: #000; }
+            .obs-links a:hover { background: var(--purple-light); color: #FFF; }
             
             footer {
                 text-align: center;
@@ -442,16 +446,14 @@ async def home_page():
             <a href="/" class="brand">CRISTAUX JEWELLERY</a>
             <div class="nav-links">
                 <a href="#catalog">Collections</a>
-                <a href="/products" target="_blank">JSON API</a>
-                <a href="/metrics" target="_blank">Metrics</a>
-                <a href="http://localhost:3000" target="_blank">Grafana</a>
-                <a href="http://localhost:5601" target="_blank">Kibana</a>
+                <a href="#orders">My Orders</a>
+                <a href="#about">About Us</a>
             </div>
         </header>
 
         <section class="hero">
             <h1>CRISTAUX JEWELLERY</h1>
-            <p>Everyday stylish & affordable jewellery for every occasion. Monitored with Prometheus & Elasticsearch observability telemetry.</p>
+            <p>Everyday stylish & affordable luxury jewellery for every special occasion.</p>
         </section>
 
         <div class="container" id="catalog">
@@ -466,21 +468,27 @@ async def home_page():
                         <p class="card-desc">{p['desc']}</p>
                         <div class="card-footer">
                             <span class="price">PKR {p['price']:,.2f}</span>
-                            <button class="btn" onclick="orderItem('{p['id']}')">Order Now</button>
+                            <button class="btn" onclick="orderItem('{p['id']}', '{p['name']}')">Order Now</button>
                         </div>
                     </div>
                 </div>
                 """ for p in PRODUCTS]) + """
             </div>
 
-            <div class="obs-panel">
-                <h3>Observability Control Center</h3>
-                <p>Monitor metrics, trace HTTP latency histograms, and search Filebeat JSON logs in real time.</p>
-                <div class="obs-links">
-                    <a href="/metrics" target="_blank">📊 /metrics (Prometheus)</a>
-                    <a href="http://localhost:3000" target="_blank">📈 Grafana Dashboards (Port 3000)</a>
-                    <a href="http://localhost:5601" target="_blank">🔍 Kibana Log Search (Port 5601)</a>
-                    <a href="#" onclick="triggerFault()">⚠️ Trigger Part E1 Anomaly (500ms Delay)</a>
+            <!-- Active Orders & Cancellation Section -->
+            <div style="margin-top: 4rem;" id="orders">
+                <h2 class="section-title">Your Active Orders</h2>
+                <div id="orders-list" style="background: var(--card-bg); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 8px; padding: 1.5rem; text-align: center;">
+                    <p style="color: var(--text-muted);">Loading orders...</p>
+                </div>
+            </div>
+
+            <!-- About Us Section -->
+            <div style="margin-top: 5rem; margin-bottom: 2rem;" id="about">
+                <h2 class="section-title">About Cristaux Jewellery</h2>
+                <div style="background: var(--card-bg); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 8px; padding: 2rem; max-width: 800px; margin: 0 auto; text-align: center; color: var(--text-light);">
+                    <p style="margin-bottom: 1rem;">At <strong>Cristaux Jewellery</strong>, we believe elegance should be effortless. Crafting handcrafted silver, gold-plated, and crystal statement pieces designed to make every occasion memorable.</p>
+                    <p style="color: var(--text-muted); font-size: 0.9rem;">Designed with timeless artistry and monitored with high-performance real-time telemetry.</p>
                 </div>
             </div>
         </div>
@@ -490,7 +498,19 @@ async def home_page():
         </footer>
 
         <script>
-            async function orderItem(productId) {
+            async function fetchAllOrders() {
+                try {
+                    const res = await fetch('/api/orders');
+                    if (res.ok) {
+                        const data = await res.json();
+                        renderOrders(data.orders || []);
+                    }
+                } catch (e) {
+                    console.error("Failed to fetch orders:", e);
+                }
+            }
+
+            async function orderItem(productId, productName) {
                 const cartId = 'cart-' + Math.floor(Math.random() * 10000);
                 
                 // 1. Add to cart
@@ -508,17 +528,60 @@ async def home_page():
                 });
                 
                 const data = await res.json();
-                alert('Order Placed Successfully! Order ID: ' + data.order_id + '\\nCheck Grafana and Kibana to see metrics and logs updated.');
+                await fetchAllOrders();
+                alert('Order Placed Successfully! Order ID: ' + data.order_id);
             }
 
-            async function triggerFault() {
-                await fetch('/admin/fault', {
+            async function cancelOrder(orderId) {
+                const res = await fetch('/orders/' + orderId + '/cancel', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({delay_ms: 500, error_rate: 0})
+                    body: JSON.stringify({reason: 'customer_cancelled_via_ui'})
                 });
-                alert('Fault Introduced: 500ms artificial delay active! Check Grafana latency histogram.');
+                
+                await fetchAllOrders();
+                alert('Order ' + orderId + ' has been cancelled.');
             }
+
+            function renderOrders(orders) {
+                const container = document.getElementById('orders-list');
+                if (!orders || orders.length === 0) {
+                    container.innerHTML = '<p style="color: var(--text-muted);">No active orders placed yet. Place an order above to view management options.</p>';
+                    return;
+                }
+
+                let html = '<table style="width:100%; text-align:left; border-collapse:collapse; color:var(--text-light);">';
+                html += '<tr style="border-bottom:1px solid rgba(168,85,247,0.3); color:var(--purple-light); height:40px;">' +
+                        '<th>Order ID</th><th>Customer</th><th>Item(s)</th><th>Total</th><th>Status</th><th>Action</th></tr>';
+
+                orders.forEach(o => {
+                    const isCancelled = o.status === 'cancelled';
+                    const isFulfilled = o.status === 'fulfilled';
+                    const itemNames = (o.items || []).map(i => i.name).join(', ') || 'Jewellery Item';
+                    let statusBg = '#065F46'; // pending / green
+                    if (isCancelled) statusBg = '#991B1B';
+                    if (isFulfilled) statusBg = '#1E3A8A';
+
+                    html += `<tr style="border-bottom:1px solid rgba(255,255,255,0.05); height:50px;">
+                        <td style="font-family:monospace; color:var(--purple-soft);">${o.order_id}</td>
+                        <td style="font-size:0.85rem; color:var(--text-muted);">${o.customer_email}</td>
+                        <td>${itemNames}</td>
+                        <td>PKR ${o.total_amount.toLocaleString()}</td>
+                        <td><span style="padding:0.2rem 0.6rem; border-radius:4px; font-size:0.8rem; background:${statusBg};">${o.status.toUpperCase()}</span></td>
+                        <td>
+                            ${isCancelled || isFulfilled ? `<span style="color:var(--text-muted); font-size:0.85rem;">${o.status.toUpperCase()}</span>` : 
+                              `<button class="btn" style="background:#DC2626; padding:0.4rem 0.8rem;" onclick="cancelOrder('${o.order_id}')">Cancel Order</button>`}
+                        </td>
+                    </tr>`;
+                });
+
+                html += '</table>';
+                container.innerHTML = html;
+            }
+
+            // Initial fetch & poll every 3 seconds to reflect background traffic
+            fetchAllOrders();
+            setInterval(fetchAllOrders, 3000);
         </script>
     </body>
     </html>
@@ -529,6 +592,12 @@ async def home_page():
 # --------------------------------------------------------------------------
 # Endpoints (Part A & B)
 # --------------------------------------------------------------------------
+@app.get("/api/orders")
+async def get_all_orders():
+    """Retrieve all placed orders for UI display and tracking."""
+    return {"orders": list(ORDERS.values())}
+
+
 @app.get("/products")
 async def get_products(category: Optional[str] = None):
     """List available jewellery catalog."""
