@@ -69,6 +69,33 @@ py -3 seed_traffic.py
 
 ---
 
+---
+
+## Part A: REST Principles & Reliability Extension
+
+### 1. Interactive OpenAPI Specification & Swagger UI
+- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **ReDoc UI**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+- **Raw OpenAPI Spec**: [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json) (or inspect [`openapi.json`](./openapi.json))
+- **Export Schema Command**:
+  ```bash
+  py export_openapi.py
+  ```
+
+### 2. Run Automated Test Suite (Validation, Idempotency, Rate Limiting)
+Runs comprehensive tests for valid request (`201 Created`), invalid input (`400/422` with consistent error schema), repeated request (`Idempotency-Key` replay), and rate limiting (`429 Too Many Requests` with `Retry-After`):
+```bash
+py test_api.py
+```
+
+### 3. Run Resilient Python Caller Service
+Demonstrates client-side timeouts, exponential backoff retries on safe operations, and 3-state circuit breaker (`CLOSED` $\rightarrow$ `OPEN` $\rightarrow$ `HALF-OPEN` $\rightarrow$ `CLOSED`):
+```bash
+py caller.py
+```
+
+---
+
 ##  Cleanup & Teardown
 
 Stop containers while keeping data:
@@ -80,3 +107,4 @@ Remove containers, networks, and all stored data volumes:
 ```bash
 docker compose down -v
 ```
+

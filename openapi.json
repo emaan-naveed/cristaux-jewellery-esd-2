@@ -1,0 +1,710 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Cristaux Jewellery Store API",
+    "description": "Enterprise Luxury Jewellery RESTful E-Commerce API featuring Prometheus Metrics, Structured JSON Logging, OpenAPI 3.1 Spec, Rate Limiting, and Idempotency Protection.",
+    "contact": {
+      "name": "Cristaux Jewellery Engineering Team",
+      "email": "api@cristaux-jewellery.com"
+    },
+    "version": "2.0.0"
+  },
+  "paths": {
+    "/api/v1/products": {
+      "get": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "List jewellery catalog",
+        "description": "Retrieve all available jewellery items, optionally filtered by category.",
+        "operationId": "get_products_v1_api_v1_products_get",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter products by category",
+              "title": "Category"
+            },
+            "description": "Filter products by category"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/{product_id}": {
+      "get": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Get product details",
+        "description": "Retrieve details of a specific jewellery product by ID.",
+        "operationId": "get_product_by_id_v1_api_v1_products__product_id__get",
+        "parameters": [
+          {
+            "name": "product_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Product Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cart/{cart_id}": {
+      "get": {
+        "tags": [
+          "Cart"
+        ],
+        "summary": "Retrieve cart items",
+        "description": "View contents and total value of a shopping cart.",
+        "operationId": "get_cart_v1_api_v1_cart__cart_id__get",
+        "parameters": [
+          {
+            "name": "cart_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cart Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Cart"
+        ],
+        "summary": "Clear shopping cart",
+        "description": "Clear all items from a shopping cart.",
+        "operationId": "clear_cart_v1_api_v1_cart__cart_id__delete",
+        "parameters": [
+          {
+            "name": "cart_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cart Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cart/items": {
+      "post": {
+        "tags": [
+          "Cart"
+        ],
+        "summary": "Add item to shopping cart",
+        "description": "Add a jewellery item to the specified shopping cart with quantity.",
+        "operationId": "add_to_cart_v1_api_v1_cart_items_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddToCartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orders": {
+      "get": {
+        "tags": [
+          "Orders"
+        ],
+        "summary": "List all orders",
+        "description": "Retrieve all placed orders across the system.",
+        "operationId": "get_all_orders_v1_api_v1_orders_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Orders"
+        ],
+        "summary": "Place a new order (with Idempotency & Rate Limiting)",
+        "description": "Place an order from an active shopping cart.\n- **Rate Limiting**: Maximum 5 calls per 10-second rolling window per client IP.\n- **Idempotency Protection**: Safe retries via `Idempotency-Key` header.\n- **HTTP 201 Created**: Returns created order with `Location` header.",
+        "operationId": "place_order_v1_api_v1_orders_post",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Unique client key to prevent duplicate orders upon retries",
+              "title": "Idempotency-Key"
+            },
+            "description": "Unique client key to prevent duplicate orders upon retries"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orders/{order_id}": {
+      "get": {
+        "tags": [
+          "Orders"
+        ],
+        "summary": "Get order by ID",
+        "description": "Retrieve details of a specific placed order.",
+        "operationId": "get_order_by_id_v1_api_v1_orders__order_id__get",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Order Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Orders"
+        ],
+        "summary": "Update order status (Cancel or Fulfill)",
+        "description": "RESTful endpoint for modifying order state (cancellation or fulfillment).\n- Status **cancelled**: Cancels a pending order and updates cancellation metrics.\n- Status **fulfilled**: Marks a pending order as fulfilled.\n- Prevents invalid transitions with HTTP 409 Conflict.",
+        "operationId": "update_order_status_v1_api_v1_orders__order_id__patch",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Order Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOrderStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Prometheus scrape target",
+        "description": "Prometheus scrape target.",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Service health check",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/fault": {
+      "post": {
+        "tags": [
+          "Admin & Observability"
+        ],
+        "summary": "Configure fault injection",
+        "description": "Configure artificial delay, error rate, or specific status codes (e.g. 503).",
+        "operationId": "set_fault_admin_fault_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FaultConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/cardinality-test": {
+      "get": {
+        "tags": [
+          "Admin & Observability"
+        ],
+        "summary": "Cardinality explosion test",
+        "description": "Endpoint to demonstrate cardinality explosion by adding request_id as a label.",
+        "operationId": "cardinality_test_admin_cardinality_test_get",
+        "parameters": [
+          {
+            "name": "req_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Req Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/reset-limits": {
+      "post": {
+        "tags": [
+          "Admin & Observability"
+        ],
+        "summary": "Reset in-memory rate limits & idempotency cache",
+        "description": "Admin endpoint to reset rate limits and idempotency cache for test isolation.",
+        "operationId": "reset_limits_admin_reset_limits_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AddToCartRequest": {
+        "properties": {
+          "cart_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Cart Id",
+            "description": "Unique cart session identifier"
+          },
+          "product_id": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 2,
+            "title": "Product Id",
+            "description": "Catalog product ID (e.g. p1, p2)"
+          },
+          "quantity": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Quantity",
+            "description": "Quantity to add (1 to 20)",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "cart_id",
+          "product_id"
+        ],
+        "title": "AddToCartRequest"
+      },
+      "FaultConfigRequest": {
+        "properties": {
+          "delay_ms": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Delay Ms",
+            "description": "Artificial latency delay in milliseconds",
+            "default": 0.0
+          },
+          "error_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Error Rate",
+            "description": "Probability of triggering errors (0.0 to 1.0)",
+            "default": 0.0
+          },
+          "status_code": {
+            "type": "integer",
+            "title": "Status Code",
+            "description": "HTTP status code to simulate (e.g. 503, 500, or 0 to disable)",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "FaultConfigRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "OrderRequest": {
+        "properties": {
+          "cart_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Cart Id",
+            "description": "Active cart ID to checkout"
+          },
+          "customer_email": {
+            "type": "string",
+            "title": "Customer Email",
+            "description": "Customer contact email address"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cart_id",
+          "customer_email"
+        ],
+        "title": "OrderRequest"
+      },
+      "UpdateOrderStatusRequest": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "cancelled",
+              "fulfilled"
+            ],
+            "title": "Status",
+            "description": "Target status ('cancelled' or 'fulfilled')"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Reason for status update",
+            "default": "customer_request"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "UpdateOrderStatusRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

@@ -1,7 +1,11 @@
 """
-Cristaux Jewellery - Luxury E-Commerce Application with Observability.
+Cristaux Jewellery - Luxury E-Commerce Application with Observability & REST Best Practices.
 
-Part A: E-Commerce Store Frontend & APIs (Products, Cart, Orders)
+Part A: E-Commerce Store Frontend & RESTful APIs (Products, Cart, Orders)
+        - OpenAPI Specification (v2.0.0)
+        - Idempotency via Idempotency-Key header (Safe Repeats)
+        - Rate Limiting with 429 Too Many Requests & Retry-After
+        - Standardized, consistent JSON error responses
 Part B: Metrics (Counter, Gauge, Histogram, Summary)
 Part C: Structured JSON Logging (with x-request-id)
 Part E: Fault Injection & Cardinality Explosion endpoints
@@ -9,13 +13,15 @@ Part E: Fault Injection & Cardinality Explosion endpoints
 
 import json
 import logging
+import re
 import sys
 import time
 import uuid
-from typing import Dict, Optional, List
-from pydantic import BaseModel
+from typing import Dict, Optional, List, Literal, Any
 
-from fastapi import FastAPI, Request, HTTPException, Query, Response
+from pydantic import BaseModel, Field, field_validator
+from fastapi import FastAPI, Request, HTTPException, Query, Response, Header
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -110,8 +116,16 @@ ORDER_PROCESSING_SUMMARY = Summary(
 # App State & In-Memory Store
 # --------------------------------------------------------------------------
 app = FastAPI(
-    title="Cristaux Jewellery Store",
-    description="Luxury Jewellery E-Commerce Store with Prometheus Metrics & Filebeat JSON Logging",
+    title="Cristaux Jewellery Store API",
+    description="Enterprise Luxury Jewellery RESTful E-Commerce API featuring Prometheus Metrics, Structured JSON Logging, OpenAPI 3.1 Spec, Rate Limiting, and Idempotency Protection.",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    contact={
+        "name": "Cristaux Jewellery Engineering Team",
+        "email": "api@cristaux-jewellery.com",
+    },
 )
 
 # In-memory database simulation
@@ -169,15 +183,118 @@ PRODUCTS = [
 CARTS: Dict[str, List[Dict]] = {}  # cart_id -> list of product items
 ORDERS: Dict[str, Dict] = {}       # order_id -> order details
 
-# Fault Injection State (Part E1)
+# Fault Injection State (Part E1 & Testing)
 FAULT_CONFIG = {
     "delay_ms": 0.0,
-    "error_rate": 0.0  # 0.0 to 1.0
+    "error_rate": 0.0,
+    "status_code": 0  # e.g., 503 or 500
 }
+
+# --------------------------------------------------------------------------
+# Rate Limiting & Idempotency Store
+# --------------------------------------------------------------------------
+class InMemoryRateLimiter:
+    """
+    Sliding window rate limiter per client IP.
+    """
+    def __init__(self, limit: int = 5, window_seconds: float = 10.0):
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self.requests: Dict[str, List[float]] = {}
+
+    def check(self, client_key: str) -> tuple[bool, int, int]:
+        """
+        Check if request is permitted.
+        Returns: (allowed: bool, remaining: int, retry_after: int)
+        """
+        now = time.time()
+        window_start = now - self.window_seconds
+        timestamps = [t for t in self.requests.get(client_key, []) if t > window_start]
+
+        if len(timestamps) >= self.limit:
+            oldest = timestamps[0]
+            retry_after = max(1, int(self.window_seconds - (now - oldest)) + 1)
+            self.requests[client_key] = timestamps
+            return False, 0, retry_after
+
+        timestamps.append(now)
+        self.requests[client_key] = timestamps
+        remaining = self.limit - len(timestamps)
+        return True, remaining, 0
+
+    def reset(self):
+        self.requests.clear()
+
+ORDER_RATE_LIMITER = InMemoryRateLimiter(limit=5, window_seconds=10.0)
+
+# Idempotency store: key -> {"order_id": str, "data": dict, "created_at": float}
+IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
 
 
 # --------------------------------------------------------------------------
-# Middleware: Request ID, Logging & Duration Histogram
+# Consistent Error Response Helper & Exception Handlers
+# --------------------------------------------------------------------------
+def make_error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    details: Any = None,
+    headers: Optional[Dict[str, str]] = None,
+) -> JSONResponse:
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    content = {
+        "error": {
+            "code": code,
+            "message": message,
+            "details": details,
+            "timestamp": now,
+        }
+    }
+    return JSONResponse(status_code=status_code, content=content, headers=headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    simplified = [
+        {
+            "field": " -> ".join(str(loc) for loc in err.get("loc", []) if loc != "body"),
+            "issue": err.get("msg"),
+            "type": err.get("type"),
+        }
+        for err in errors
+    ]
+    return make_error_response(
+        status_code=422,
+        code="VALIDATION_ERROR",
+        message="The request payload failed input schema validation.",
+        details=simplified,
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    code_map = {
+        400: "BAD_REQUEST",
+        404: "RESOURCE_NOT_FOUND",
+        409: "CONFLICT",
+        422: "UNPROCESSABLE_ENTITY",
+        429: "RATE_LIMIT_EXCEEDED",
+        500: "INTERNAL_SERVER_ERROR",
+        503: "SERVICE_UNAVAILABLE",
+    }
+    code = code_map.get(exc.status_code, "ERROR")
+    headers = getattr(exc, "headers", None)
+    return make_error_response(
+        status_code=exc.status_code,
+        code=code,
+        message=str(exc.detail),
+        headers=headers,
+    )
+
+
+# --------------------------------------------------------------------------
+# Middleware: Request ID, Logging, Fault Injection & Duration Histogram
 # --------------------------------------------------------------------------
 @app.middleware("http")
 async def observability_middleware(request: Request, call_next):
@@ -185,8 +302,34 @@ async def observability_middleware(request: Request, call_next):
     started = time.perf_counter()
 
     # Fault injection: delay (Part E1)
-    if FAULT_CONFIG["delay_ms"] > 0:
+    if FAULT_CONFIG.get("delay_ms", 0) > 0 and not request.url.path.startswith("/admin/fault"):
         time.sleep(FAULT_CONFIG["delay_ms"] / 1000.0)
+
+    # Fault injection: status code simulation (e.g. 503 Service Unavailable)
+    if FAULT_CONFIG.get("status_code", 0) > 0 and not request.url.path.startswith("/admin/fault"):
+        status_code = int(FAULT_CONFIG["status_code"])
+        duration = time.perf_counter() - started
+        HTTP_REQUEST_DURATION.labels(
+            method=request.method, path=request.url.path, status=str(status_code)
+        ).observe(duration)
+        logger.error(
+            f"simulated fault status code {status_code}",
+            extra={
+                "extra_fields": {
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": status_code,
+                    "duration_ms": round(duration * 1000, 2),
+                }
+            },
+        )
+        return make_error_response(
+            status_code=status_code,
+            code="SERVICE_UNAVAILABLE" if status_code == 503 else "INTERNAL_SERVER_ERROR",
+            message=f"Simulated fault injection server failure (HTTP {status_code}).",
+            headers={"x-request-id": request_id},
+        )
 
     try:
         response = await call_next(request)
@@ -238,28 +381,42 @@ async def observability_middleware(request: Request, call_next):
 
 
 # --------------------------------------------------------------------------
-# Domain API Models
+# Domain API Models & Input Validation
 # --------------------------------------------------------------------------
 class AddToCartRequest(BaseModel):
-    cart_id: str
-    product_id: str
+    cart_id: str = Field(..., min_length=3, max_length=64, description="Unique cart session identifier")
+    product_id: str = Field(..., min_length=2, max_length=16, description="Catalog product ID (e.g. p1, p2)")
+    quantity: int = Field(default=1, ge=1, le=20, description="Quantity to add (1 to 20)")
 
 class OrderRequest(BaseModel):
-    cart_id: str
-    customer_email: str
+    cart_id: str = Field(..., min_length=3, max_length=64, description="Active cart ID to checkout")
+    customer_email: str = Field(..., description="Customer contact email address")
+
+    @field_validator("customer_email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        email_regex = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+        if not re.match(email_regex, v.strip()):
+            raise ValueError("Invalid email format. Must be a valid email (e.g., user@example.com)")
+        return v.strip().lower()
+
+class UpdateOrderStatusRequest(BaseModel):
+    status: Literal["cancelled", "fulfilled"] = Field(..., description="Target status ('cancelled' or 'fulfilled')")
+    reason: Optional[str] = Field("customer_request", max_length=120, description="Reason for status update")
 
 class CancelOrderRequest(BaseModel):
     reason: str = "customer_changed_mind"
 
 class FaultConfigRequest(BaseModel):
-    delay_ms: float = 0.0
-    error_rate: float = 0.0
+    delay_ms: float = Field(default=0.0, ge=0.0, description="Artificial latency delay in milliseconds")
+    error_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Probability of triggering errors (0.0 to 1.0)")
+    status_code: int = Field(default=0, description="HTTP status code to simulate (e.g. 503, 500, or 0 to disable)")
 
 
 # --------------------------------------------------------------------------
 # Interactive UI Endpoint (Root Homepage)
 # --------------------------------------------------------------------------
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def home_page():
     html_content = """
     <!DOCTYPE html>
@@ -447,6 +604,7 @@ async def home_page():
             <div class="nav-links">
                 <a href="#catalog">Collections</a>
                 <a href="#orders">My Orders</a>
+                <a href="/docs" target="_blank">Swagger OpenAPI Docs</a>
                 <a href="#about">About Us</a>
             </div>
         </header>
@@ -488,19 +646,19 @@ async def home_page():
                 <h2 class="section-title">About Cristaux Jewellery</h2>
                 <div style="background: var(--card-bg); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 8px; padding: 2rem; max-width: 800px; margin: 0 auto; text-align: center; color: var(--text-light);">
                     <p style="margin-bottom: 1rem;">At <strong>Cristaux Jewellery</strong>, we believe elegance should be effortless. Crafting handcrafted silver, gold-plated, and crystal statement pieces designed to make every occasion memorable.</p>
-                    <p style="color: var(--text-muted); font-size: 0.9rem;">Designed with timeless artistry and monitored with high-performance real-time telemetry.</p>
+                    <p style="color: var(--text-muted); font-size: 0.9rem;">Designed with timeless artistry, RESTful standard practices, and monitored with real-time Prometheus telemetry.</p>
                 </div>
             </div>
         </div>
 
         <footer>
-            <p>&copy; 2026 Cristaux Jewellery Store. Enterprise Software Development Assignment 1.</p>
+            <p>&copy; 2026 Cristaux Jewellery Store. Enterprise Software Development Assignment 1 Extension.</p>
         </footer>
 
         <script>
             async function fetchAllOrders() {
                 try {
-                    const res = await fetch('/api/orders');
+                    const res = await fetch('/api/v1/orders');
                     if (res.ok) {
                         const data = await res.json();
                         renderOrders(data.orders || []);
@@ -512,35 +670,50 @@ async def home_page():
 
             async function orderItem(productId, productName) {
                 const cartId = 'cart-' + Math.floor(Math.random() * 10000);
+                const idempotencyKey = 'order-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
                 
-                // 1. Add to cart
-                await fetch('/cart', {
+                // 1. Add to cart via RESTful endpoint
+                await fetch('/api/v1/cart/items', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({cart_id: cartId, product_id: productId})
+                    body: JSON.stringify({cart_id: cartId, product_id: productId, quantity: 1})
                 });
                 
-                // 2. Checkout order
-                const res = await fetch('/orders', {
+                // 2. Checkout order via RESTful endpoint with Idempotency-Key
+                const res = await fetch('/api/v1/orders', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Idempotency-Key': idempotencyKey
+                    },
                     body: JSON.stringify({cart_id: cartId, customer_email: 'vip@cristaux.com'})
                 });
                 
-                const data = await res.json();
-                await fetchAllOrders();
-                alert('Order Placed Successfully! Order ID: ' + data.order_id);
+                if (res.status === 201) {
+                    const data = await res.json();
+                    await fetchAllOrders();
+                    alert('Order Placed Successfully! Order ID: ' + data.order_id);
+                } else {
+                    const err = await res.json();
+                    alert('Order Failed: ' + (err.error ? err.error.message : 'Error'));
+                }
             }
 
             async function cancelOrder(orderId) {
-                const res = await fetch('/orders/' + orderId + '/cancel', {
-                    method: 'POST',
+                // Cancel order via RESTful PATCH endpoint
+                const res = await fetch('/api/v1/orders/' + orderId, {
+                    method: 'PATCH',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({reason: 'customer_cancelled_via_ui'})
+                    body: JSON.stringify({status: 'cancelled', reason: 'customer_cancelled_via_ui'})
                 });
                 
-                await fetchAllOrders();
-                alert('Order ' + orderId + ' has been cancelled.');
+                if (res.ok) {
+                    await fetchAllOrders();
+                    alert('Order ' + orderId + ' has been cancelled.');
+                } else {
+                    const err = await res.json();
+                    alert('Cancellation failed: ' + (err.error ? err.error.message : 'Error'));
+                }
             }
 
             function renderOrders(orders) {
@@ -590,65 +763,172 @@ async def home_page():
 
 
 # --------------------------------------------------------------------------
-# Endpoints (Part A & B)
+# Catalog Endpoints (RESTful v1)
 # --------------------------------------------------------------------------
-@app.get("/api/orders")
-async def get_all_orders():
-    """Retrieve all placed orders for UI display and tracking."""
-    return {"orders": list(ORDERS.values())}
-
-
-@app.get("/products")
-async def get_products(category: Optional[str] = None):
-    """List available jewellery catalog."""
+@app.get("/api/v1/products", tags=["Catalog"], summary="List jewellery catalog")
+async def get_products_v1(category: Optional[str] = Query(None, description="Filter products by category")):
+    """Retrieve all available jewellery items, optionally filtered by category."""
     if category:
-        filtered = [p for p in PRODUCTS if p["category"] == category]
-        return {"products": filtered}
-    return {"products": PRODUCTS}
+        filtered = [p for p in PRODUCTS if p["category"].lower() == category.lower()]
+        return {"products": filtered, "count": len(filtered)}
+    return {"products": PRODUCTS, "count": len(PRODUCTS)}
 
 
-@app.post("/cart")
-async def add_to_cart(item: AddToCartRequest):
-    """Add item to shopping cart."""
+@app.get("/api/v1/products/{product_id}", tags=["Catalog"], summary="Get product details")
+async def get_product_by_id_v1(product_id: str):
+    """Retrieve details of a specific jewellery product by ID."""
+    product = next((p for p in PRODUCTS if p["id"] == product_id), None)
+    if not product:
+        raise HTTPException(status_code=404, detail=f"Product with ID '{product_id}' was not found.")
+    return product
+
+
+# Backward compatibility alias
+@app.get("/products", include_in_schema=False)
+async def get_products_legacy(category: Optional[str] = None):
+    return await get_products_v1(category)
+
+
+# --------------------------------------------------------------------------
+# Shopping Cart Endpoints (RESTful v1)
+# --------------------------------------------------------------------------
+@app.get("/api/v1/cart/{cart_id}", tags=["Cart"], summary="Retrieve cart items")
+async def get_cart_v1(cart_id: str):
+    """View contents and total value of a shopping cart."""
+    items = CARTS.get(cart_id, [])
+    total = sum(item["price"] for item in items)
+    return {"cart_id": cart_id, "items": items, "total_amount": total, "item_count": len(items)}
+
+
+@app.post("/api/v1/cart/items", tags=["Cart"], summary="Add item to shopping cart", status_code=200)
+async def add_to_cart_v1(item: AddToCartRequest):
+    """Add a jewellery item to the specified shopping cart with quantity."""
     product = next((p for p in PRODUCTS if p["id"] == item.product_id), None)
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail=f"Product '{item.product_id}' not found in catalog.")
 
     if item.cart_id not in CARTS:
         CARTS[item.cart_id] = []
-        ACTIVE_CARTS_GAUGE.inc()  # Gauge increment
+        ACTIVE_CARTS_GAUGE.inc()
 
-    CARTS[item.cart_id].append(product)
+    for _ in range(item.quantity):
+        CARTS[item.cart_id].append(product)
+
     logger.info(
         "item added to cart",
         extra={
             "extra_fields": {
                 "cart_id": item.cart_id,
                 "product_id": item.product_id,
+                "quantity": item.quantity,
                 "item_name": product["name"],
             }
         },
     )
-    return {"cart_id": item.cart_id, "items": CARTS[item.cart_id]}
+    return {
+        "cart_id": item.cart_id,
+        "items": CARTS[item.cart_id],
+        "item_count": len(CARTS[item.cart_id]),
+        "total_amount": sum(p["price"] for p in CARTS[item.cart_id]),
+    }
 
 
-@app.delete("/cart/{cart_id}")
-async def clear_cart(cart_id: str):
-    """Clear shopping cart."""
+@app.delete("/api/v1/cart/{cart_id}", tags=["Cart"], summary="Clear shopping cart")
+async def clear_cart_v1(cart_id: str):
+    """Clear all items from a shopping cart."""
     if cart_id in CARTS:
         del CARTS[cart_id]
-        ACTIVE_CARTS_GAUGE.dec()  # Gauge decrement
+        ACTIVE_CARTS_GAUGE.dec()
     return {"status": "cleared", "cart_id": cart_id}
 
 
-@app.post("/orders")
-async def place_order(order_req: OrderRequest):
-    """Place an order from an active shopping cart."""
+# Backward compatibility aliases
+@app.post("/cart", include_in_schema=False)
+async def add_to_cart_legacy(item: AddToCartRequest):
+    return await add_to_cart_v1(item)
+
+
+@app.delete("/cart/{cart_id}", include_in_schema=False)
+async def clear_cart_legacy(cart_id: str):
+    return await clear_cart_v1(cart_id)
+
+
+# --------------------------------------------------------------------------
+# Orders Endpoints (RESTful v1 with Idempotency & Rate Limiting)
+# --------------------------------------------------------------------------
+@app.get("/api/v1/orders", tags=["Orders"], summary="List all orders")
+async def get_all_orders_v1():
+    """Retrieve all placed orders across the system."""
+    return {"orders": list(ORDERS.values()), "total_count": len(ORDERS)}
+
+
+@app.get("/api/v1/orders/{order_id}", tags=["Orders"], summary="Get order by ID")
+async def get_order_by_id_v1(order_id: str):
+    """Retrieve details of a specific placed order."""
+    order = ORDERS.get(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order '{order_id}' not found.")
+    return order
+
+
+@app.post(
+    "/api/v1/orders",
+    tags=["Orders"],
+    summary="Place a new order (with Idempotency & Rate Limiting)",
+    status_code=201,
+)
+async def place_order_v1(
+    order_req: OrderRequest,
+    request: Request,
+    response: Response,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", description="Unique client key to prevent duplicate orders upon retries"),
+):
+    """
+    Place an order from an active shopping cart.
+    - **Rate Limiting**: Maximum 5 calls per 10-second rolling window per client IP.
+    - **Idempotency Protection**: Safe retries via `Idempotency-Key` header.
+    - **HTTP 201 Created**: Returns created order with `Location` header.
+    """
+    # 1. Rate Limiting Check
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    allowed, remaining, retry_after = ORDER_RATE_LIMITER.check(client_ip)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Maximum 5 orders per 10 seconds allowed. Please retry after {retry_after} seconds.",
+            headers={
+                "Retry-After": str(retry_after),
+                "X-RateLimit-Limit": "5",
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Reset": str(int(time.time() + retry_after)),
+            },
+        )
+
+    # 2. Idempotency Check: Safe Repeats
+    if idempotency_key:
+        cached = IDEMPOTENCY_STORE.get(idempotency_key)
+        if cached:
+            logger.info(
+                "idempotent order replay returned",
+                extra={"extra_fields": {"idempotency_key": idempotency_key, "order_id": cached["order_id"]}},
+            )
+            return JSONResponse(
+                status_code=201,
+                content=cached["data"],
+                headers={
+                    "Location": f"/api/v1/orders/{cached['order_id']}",
+                    "Idempotent-Replay": "true",
+                    "X-RateLimit-Limit": "5",
+                    "X-RateLimit-Remaining": str(remaining),
+                },
+            )
+
+    # 3. Validate Cart
     cart_items = CARTS.get(order_req.cart_id)
     if not cart_items:
-        raise HTTPException(status_code=400, detail="Cart is empty or does not exist")
+        raise HTTPException(status_code=400, detail=f"Cart '{order_req.cart_id}' is empty or does not exist.")
 
-    # Summary metric: time order creation execution
+    # 4. Summary metric: time order creation execution
     start_time = time.perf_counter()
 
     order_id = f"ord-{uuid.uuid4().hex[:8]}"
@@ -658,7 +938,7 @@ async def place_order(order_req: OrderRequest):
     order = {
         "order_id": order_id,
         "customer_email": order_req.customer_email,
-        "items": cart_items,
+        "items": list(cart_items),
         "total_amount": total_amount,
         "status": "pending",
         "created_at": time.time(),
@@ -684,81 +964,122 @@ async def place_order(order_req: OrderRequest):
                 "total_amount": total_amount,
                 "items_count": len(cart_items),
                 "main_category": main_category,
+                "idempotency_key": idempotency_key,
             }
         },
     )
 
-    return order
+    # 5. Store in Idempotency Cache
+    if idempotency_key:
+        IDEMPOTENCY_STORE[idempotency_key] = {
+            "order_id": order_id,
+            "data": order,
+            "created_at": time.time(),
+        }
 
-
-@app.post("/orders/{order_id}/cancel")
-async def cancel_order(order_id: str, cancel_req: CancelOrderRequest):
-    """Cancel a pending order."""
-    order = ORDERS.get(order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-
-    if order["status"] == "cancelled":
-        return {"status": "already_cancelled"}
-
-    order["status"] = "cancelled"
-    ORDERS_CANCELLED_TOTAL.labels(reason=cancel_req.reason).inc()  # Counter
-    PENDING_ORDERS_GAUGE.dec()                                      # Gauge
-
-    logger.info(
-        "order cancelled",
-        extra={
-            "extra_fields": {
-                "order_id": order_id,
-                "reason": cancel_req.reason,
-            }
+    return JSONResponse(
+        status_code=201,
+        content=order,
+        headers={
+            "Location": f"/api/v1/orders/{order_id}",
+            "Idempotent-Replay": "false",
+            "X-RateLimit-Limit": "5",
+            "X-RateLimit-Remaining": str(remaining),
         },
     )
-    return {"order_id": order_id, "status": "cancelled"}
 
 
-@app.post("/orders/{order_id}/fulfill")
-async def fulfill_order(order_id: str):
-    """Fulfill a pending order."""
+@app.patch("/api/v1/orders/{order_id}", tags=["Orders"], summary="Update order status (Cancel or Fulfill)")
+async def update_order_status_v1(order_id: str, update_req: UpdateOrderStatusRequest):
+    """
+    RESTful endpoint for modifying order state (cancellation or fulfillment).
+    - Status **cancelled**: Cancels a pending order and updates cancellation metrics.
+    - Status **fulfilled**: Marks a pending order as fulfilled.
+    - Prevents invalid transitions with HTTP 409 Conflict.
+    """
     order = ORDERS.get(order_id)
     if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+        raise HTTPException(status_code=404, detail=f"Order '{order_id}' was not found.")
 
-    if order["status"] == "fulfilled":
-        return {"status": "already_fulfilled"}
+    target_status = update_req.status
 
-    order["status"] = "fulfilled"
-    PENDING_ORDERS_GAUGE.dec()  # Gauge decrement
+    if target_status == "cancelled":
+        if order["status"] == "cancelled":
+            raise HTTPException(status_code=409, detail=f"Order '{order_id}' is already cancelled.")
+        if order["status"] == "fulfilled":
+            raise HTTPException(status_code=409, detail=f"Order '{order_id}' cannot be cancelled because it has already been fulfilled.")
 
-    logger.info(
-        "order fulfilled",
-        extra={"extra_fields": {"order_id": order_id}},
-    )
-    return {"order_id": order_id, "status": "fulfilled"}
+        order["status"] = "cancelled"
+        order["cancellation_reason"] = update_req.reason
+        ORDERS_CANCELLED_TOTAL.labels(reason=update_req.reason).inc()  # Counter
+        PENDING_ORDERS_GAUGE.dec()                                      # Gauge
+
+        logger.info(
+            "order cancelled",
+            extra={"extra_fields": {"order_id": order_id, "reason": update_req.reason}},
+        )
+        return {"order_id": order_id, "status": "cancelled", "reason": update_req.reason}
+
+    elif target_status == "fulfilled":
+        if order["status"] == "fulfilled":
+            raise HTTPException(status_code=409, detail=f"Order '{order_id}' is already fulfilled.")
+        if order["status"] == "cancelled":
+            raise HTTPException(status_code=409, detail=f"Order '{order_id}' cannot be fulfilled because it has been cancelled.")
+
+        order["status"] = "fulfilled"
+        PENDING_ORDERS_GAUGE.dec()  # Gauge decrement
+
+        logger.info(
+            "order fulfilled",
+            extra={"extra_fields": {"order_id": order_id}},
+        )
+        return {"order_id": order_id, "status": "fulfilled"}
+
+
+# Backward compatibility aliases
+@app.get("/api/orders", include_in_schema=False)
+async def get_orders_legacy():
+    return await get_all_orders_v1()
+
+
+@app.post("/orders", include_in_schema=False)
+async def place_order_legacy(order_req: OrderRequest, request: Request, response: Response):
+    return await place_order_v1(order_req, request, response)
+
+
+@app.post("/orders/{order_id}/cancel", include_in_schema=False)
+async def cancel_order_legacy(order_id: str, cancel_req: CancelOrderRequest):
+    return await update_order_status_v1(order_id, UpdateOrderStatusRequest(status="cancelled", reason=cancel_req.reason))
+
+
+@app.post("/orders/{order_id}/fulfill", include_in_schema=False)
+async def fulfill_order_legacy(order_id: str):
+    return await update_order_status_v1(order_id, UpdateOrderStatusRequest(status="fulfilled"))
 
 
 # --------------------------------------------------------------------------
-# Metrics Endpoint for Prometheus
+# Metrics & Health Endpoints (Unchanged)
 # --------------------------------------------------------------------------
-@app.get("/metrics")
+@app.get("/metrics", tags=["Observability"], summary="Prometheus scrape target")
 async def metrics():
     """Prometheus scrape target."""
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@app.get("/health")
+@app.get("/health", tags=["Observability"], summary="Service health check")
 async def health():
     return {"status": "ok", "service": SERVICE_NAME}
 
 
 # --------------------------------------------------------------------------
-# Part E: Experiments Support Endpoints
+# Part E & Fault Injection Endpoints
 # --------------------------------------------------------------------------
-@app.post("/admin/fault")
+@app.post("/admin/fault", tags=["Admin & Observability"], summary="Configure fault injection")
 async def set_fault(config: FaultConfigRequest):
-    """Configure artificial delay or errors (Part E1 - Reproduce a problem)."""
+    """Configure artificial delay, error rate, or specific status codes (e.g. 503)."""
     FAULT_CONFIG["delay_ms"] = config.delay_ms
     FAULT_CONFIG["error_rate"] = config.error_rate
+    FAULT_CONFIG["status_code"] = config.status_code
     logger.warning(
         "fault configuration updated",
         extra={"extra_fields": {"fault_config": FAULT_CONFIG}},
@@ -766,9 +1087,17 @@ async def set_fault(config: FaultConfigRequest):
     return {"status": "updated", "fault_config": FAULT_CONFIG}
 
 
-@app.get("/admin/cardinality-test")
+@app.get("/admin/cardinality-test", tags=["Admin & Observability"], summary="Cardinality explosion test")
 async def cardinality_test(req_id: Optional[str] = None):
-    """Endpoint to demonstrate cardinality explosion by adding request_id as a label (Part E2)."""
+    """Endpoint to demonstrate cardinality explosion by adding request_id as a label."""
     target_id = req_id or str(uuid.uuid4())
     CARDINALITY_TEST_COUNTER.labels(request_id=target_id).inc()
     return {"message": "cardinality metric incremented", "request_id": target_id}
+
+
+@app.post("/admin/reset-limits", tags=["Admin & Observability"], summary="Reset in-memory rate limits & idempotency cache")
+async def reset_limits():
+    """Admin endpoint to reset rate limits and idempotency cache for test isolation."""
+    ORDER_RATE_LIMITER.reset()
+    IDEMPOTENCY_STORE.clear()
+    return {"status": "reset", "rate_limiter": "cleared", "idempotency_store": "cleared"}
