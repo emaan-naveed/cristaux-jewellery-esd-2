@@ -13,6 +13,9 @@ grafana-data/
 filebeat-data/
 *.log
 
+# Runtime SQLite data (created on first run by orders_repository.init_db)
+data/
+
 # OS generated files
 .DS_Store
 Thumbs.db

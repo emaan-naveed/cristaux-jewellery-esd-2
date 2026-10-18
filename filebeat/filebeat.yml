@@ -20,12 +20,19 @@ processors:
       add_error_key: true
 
   # Drop the noisy logs from the monitoring stack itself so Kibana
-  # only shows your application. Comment this out if you want everything.
+  # only shows your application services. Both the FastAPI app container
+  # ("app") and the Part B gRPC service container ("grpc-service") are
+  # kept so A1 structured logging + trace correlation spans the gRPC
+  # boundary too.
   - drop_event:
       when:
-        not:
-          contains:
-            container.name: "app"
+        and:
+          - not:
+              contains:
+                container.name: "app"
+          - not:
+              contains:
+                container.name: "grpc"
 
 output.elasticsearch:
   hosts: ["http://elasticsearch:9200"]

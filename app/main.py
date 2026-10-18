@@ -32,6 +32,23 @@ from prometheus_client import (
     generate_latest,
 )
 
+try:
+    from app.orders_repository import (
+        create_order as db_create_order,
+        get_order as db_get_order,
+        list_orders as db_list_orders,
+        cancel_order as db_cancel_order,
+        fulfill_order as db_fulfill_order,
+    )
+except ImportError:
+    from orders_repository import (
+        create_order as db_create_order,
+        get_order as db_get_order,
+        list_orders as db_list_orders,
+        cancel_order as db_cancel_order,
+        fulfill_order as db_fulfill_order,
+    )
+
 # --------------------------------------------------------------------------
 # Structured Logging Setup
 # --------------------------------------------------------------------------
@@ -859,13 +876,14 @@ async def clear_cart_legacy(cart_id: str):
 @app.get("/api/v1/orders", tags=["Orders"], summary="List all orders")
 async def get_all_orders_v1():
     """Retrieve all placed orders across the system."""
-    return {"orders": list(ORDERS.values()), "total_count": len(ORDERS)}
+    orders = db_list_orders()
+    return {"orders": orders, "total_count": len(orders)}
 
 
 @app.get("/api/v1/orders/{order_id}", tags=["Orders"], summary="Get order by ID")
 async def get_order_by_id_v1(order_id: str):
     """Retrieve details of a specific placed order."""
-    order = ORDERS.get(order_id)
+    order = db_get_order(order_id)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order '{order_id}' not found.")
     return order
@@ -935,15 +953,14 @@ async def place_order_v1(
     total_amount = sum(item["price"] for item in cart_items)
     main_category = cart_items[0]["category"]
 
-    order = {
-        "order_id": order_id,
-        "customer_email": order_req.customer_email,
-        "items": list(cart_items),
-        "total_amount": total_amount,
-        "status": "pending",
-        "created_at": time.time(),
-    }
-    ORDERS[order_id] = order
+    # Store in shared SQLite persistence layer
+    order = db_create_order(
+        order_id=order_id,
+        customer_email=order_req.customer_email,
+        items=list(cart_items),
+        total_amount=total_amount,
+        status="pending",
+    )
 
     # Clear cart
     del CARTS[order_req.cart_id]
@@ -996,41 +1013,41 @@ async def update_order_status_v1(order_id: str, update_req: UpdateOrderStatusReq
     - Status **cancelled**: Cancels a pending order and updates cancellation metrics.
     - Status **fulfilled**: Marks a pending order as fulfilled.
     - Prevents invalid transitions with HTTP 409 Conflict.
+    - Executes via shared business logic repository.
     """
-    order = ORDERS.get(order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail=f"Order '{order_id}' was not found.")
-
     target_status = update_req.status
 
     if target_status == "cancelled":
-        if order["status"] == "cancelled":
+        ok, outcome, order = db_cancel_order(order_id, update_req.reason or "customer_request")
+        if outcome == "NOT_FOUND":
+            raise HTTPException(status_code=404, detail=f"Order '{order_id}' was not found.")
+        if outcome == "ALREADY_CANCELLED":
             raise HTTPException(status_code=409, detail=f"Order '{order_id}' is already cancelled.")
-        if order["status"] == "fulfilled":
+        if outcome == "ALREADY_FULFILLED":
             raise HTTPException(status_code=409, detail=f"Order '{order_id}' cannot be cancelled because it has already been fulfilled.")
 
-        order["status"] = "cancelled"
-        order["cancellation_reason"] = update_req.reason
-        ORDERS_CANCELLED_TOTAL.labels(reason=update_req.reason).inc()  # Counter
-        PENDING_ORDERS_GAUGE.dec()                                      # Gauge
+        ORDERS_CANCELLED_TOTAL.labels(reason=update_req.reason or "customer_request").inc()  # Counter
+        PENDING_ORDERS_GAUGE.dec()                                                           # Gauge
 
         logger.info(
-            "order cancelled",
+            "order cancelled via REST HTTP",
             extra={"extra_fields": {"order_id": order_id, "reason": update_req.reason}},
         )
         return {"order_id": order_id, "status": "cancelled", "reason": update_req.reason}
 
     elif target_status == "fulfilled":
-        if order["status"] == "fulfilled":
+        ok, outcome, order = db_fulfill_order(order_id)
+        if outcome == "NOT_FOUND":
+            raise HTTPException(status_code=404, detail=f"Order '{order_id}' was not found.")
+        if outcome == "ALREADY_FULFILLED":
             raise HTTPException(status_code=409, detail=f"Order '{order_id}' is already fulfilled.")
-        if order["status"] == "cancelled":
+        if outcome == "ALREADY_CANCELLED":
             raise HTTPException(status_code=409, detail=f"Order '{order_id}' cannot be fulfilled because it has been cancelled.")
 
-        order["status"] = "fulfilled"
         PENDING_ORDERS_GAUGE.dec()  # Gauge decrement
 
         logger.info(
-            "order fulfilled",
+            "order fulfilled via REST HTTP",
             extra={"extra_fields": {"order_id": order_id}},
         )
         return {"order_id": order_id, "status": "fulfilled"}

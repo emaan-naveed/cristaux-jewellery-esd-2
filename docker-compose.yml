@@ -9,11 +9,32 @@ services:
     container_name: app
     ports:
       - "8000:8000"
+    volumes:
+      - ./data:/app/data
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ------------------------------------------------------------------
+  # gRPC Order Service (Part B)
+  # ------------------------------------------------------------------
+  grpc-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.grpc
+    container_name: grpc-service
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 
   # ------------------------------------------------------------------
   # Metrics

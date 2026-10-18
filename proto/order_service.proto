@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package cristaux.orders;
+
+// OrderService manages order lifecycle operations
+service OrderService {
+  // Cancels a pending order adhering to shared domain business rules
+  rpc CancelOrder (CancelOrderRequest) returns (CancelOrderResponse);
+
+  // Retrieves order details
+  rpc GetOrder (GetOrderRequest) returns (GetOrderResponse);
+}
+
+message CancelOrderRequest {
+  string order_id = 1;
+  string reason = 2;
+}
+
+message CancelOrderResponse {
+  string order_id = 1;
+  string status = 2;
+  string reason = 3;
+  string updated_at = 4;
+  string message = 5;
+}
+
+message GetOrderRequest {
+  string order_id = 1;
+}
+
+message OrderItem {
+  string id = 1;
+  string name = 2;
+  string category = 3;
+  double price = 4;
+}
+
+message GetOrderResponse {
+  string order_id = 1;
+  string customer_email = 2;
+  double total_amount = 3;
+  string status = 4;
+  string cancellation_reason = 5;
+  string created_at = 6;
+  repeated OrderItem items = 7;
+}
