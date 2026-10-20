@@ -16,6 +16,14 @@ scrape_configs:
         labels:
           service: demo-app
 
+  # Part C: gRPC Order Service metrics (grpc_calls_total, duration, in-flight).
+  - job_name: grpc-service
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["grpc-service:50052"]
+        labels:
+          service: grpc-service
+
   # Machine metrics: CPU, memory, disk, network.
   - job_name: node-exporter
     static_configs:

@@ -31,6 +31,7 @@ from prometheus_client import (
     Summary,
     generate_latest,
 )
+from prometheus_client.core import GaugeMetricFamily, REGISTRY
 
 try:
     from app.orders_repository import (
@@ -39,6 +40,7 @@ try:
         list_orders as db_list_orders,
         cancel_order as db_cancel_order,
         fulfill_order as db_fulfill_order,
+        count_orders_by_status as db_count_orders_by_status,
     )
 except ImportError:
     from orders_repository import (
@@ -47,6 +49,7 @@ except ImportError:
         list_orders as db_list_orders,
         cancel_order as db_cancel_order,
         fulfill_order as db_fulfill_order,
+        count_orders_by_status as db_count_orders_by_status,
     )
 
 # --------------------------------------------------------------------------
@@ -127,6 +130,54 @@ ORDER_PROCESSING_SUMMARY = Summary(
     "jewellery_order_processing_seconds",
     "Time taken to process and finalize an order checkout in seconds.",
 )
+
+# --------------------------------------------------------------------------
+# Part C: Bounded-label fix + missing project metric
+# --------------------------------------------------------------------------
+# A1 used request.url.path as the histogram's `path` label, which embeds the
+# real order_id / cart_id / product_id -> unbounded cardinality. normalize_path
+# returns the matched route template (e.g. "/api/v1/orders/{order_id}") so the
+# label set stays small. Falls back to a regex normalization if no route is
+# matched yet (e.g. during the fault-injection early return before call_next).
+_ID_PATH_PATTERNS = [
+    (re.compile(r"/api/v1/orders/[^/]+"), "/api/v1/orders/{order_id}"),
+    (re.compile(r"/api/v1/products/[^/]+"), "/api/v1/products/{product_id}"),
+    (re.compile(r"/api/v1/cart/[^/]+"), "/api/v1/cart/{cart_id}"),
+    (re.compile(r"/orders/[^/]+/(?:cancel|fulfill)"), "/orders/{order_id}/{action}"),
+]
+
+
+def normalize_path(request: Request) -> str:
+    """Return a bounded, template-style path label for metrics."""
+    route = request.scope.get("route")
+    if route is not None and getattr(route, "path", None):
+        return route.path
+    path = request.url.path
+    for pattern, replacement in _ID_PATH_PATTERNS:
+        if pattern.search(path):
+            return replacement
+    return path
+
+
+# Missing project metric: order-state distribution. Computed from the shared
+# SQLite DB on every scrape (not an in-process counter) so it stays correct
+# whether an order was cancelled via REST or via the Part B gRPC service.
+class OrderStatusCollector:
+    """Custom Prometheus collector exposing jewellery_orders_by_status."""
+
+    def collect(self):
+        gauge = GaugeMetricFamily(
+            "jewellery_orders_by_status",
+            "Number of orders grouped by status (bounded label set).",
+            labels=["status"],
+        )
+        for status, count in db_count_orders_by_status().items():
+            gauge.add_metric([status], count)
+        yield gauge
+
+
+REGISTRY.register(OrderStatusCollector())
+
 
 
 # --------------------------------------------------------------------------
@@ -327,7 +378,7 @@ async def observability_middleware(request: Request, call_next):
         status_code = int(FAULT_CONFIG["status_code"])
         duration = time.perf_counter() - started
         HTTP_REQUEST_DURATION.labels(
-            method=request.method, path=request.url.path, status=str(status_code)
+            method=request.method, path=normalize_path(request), status=str(status_code)
         ).observe(duration)
         logger.error(
             f"simulated fault status code {status_code}",
@@ -355,7 +406,7 @@ async def observability_middleware(request: Request, call_next):
         status_code = 500
         duration = time.perf_counter() - started
         HTTP_REQUEST_DURATION.labels(
-            method=request.method, path=request.url.path, status=str(status_code)
+            method=request.method, path=normalize_path(request), status=str(status_code)
         ).observe(duration)
         logger.error(
             "unhandled exception occurred",
@@ -376,7 +427,7 @@ async def observability_middleware(request: Request, call_next):
 
     # Record Histogram Metric
     HTTP_REQUEST_DURATION.labels(
-        method=request.method, path=request.url.path, status=str(status_code)
+        method=request.method, path=normalize_path(request), status=str(status_code)
     ).observe(duration)
 
     # Output Structured Log

@@ -11,6 +11,8 @@ COPY proto ./proto
 COPY app ./app
 COPY grpc_server.py .
 
+# 50051 = gRPC (HTTP/2), 50052 = Prometheus /metrics (HTTP)
 EXPOSE 50051
+EXPOSE 50052
 
 CMD ["python", "grpc_server.py"]

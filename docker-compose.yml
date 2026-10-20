@@ -26,7 +26,8 @@ services:
       dockerfile: Dockerfile.grpc
     container_name: grpc-service
     ports:
-      - "50051:50051"
+      - "50051:50051"   # gRPC (HTTP/2)
+      - "50052:50052"   # Prometheus /metrics (HTTP)
     volumes:
       - ./data:/app/data
     logging:

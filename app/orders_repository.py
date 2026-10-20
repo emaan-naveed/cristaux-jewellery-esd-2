@@ -107,6 +107,28 @@ def list_orders() -> List[Dict[str, Any]]:
         return [_row_to_dict(r) for r in cursor.fetchall()]
 
 
+def count_orders_by_status() -> Dict[str, int]:
+    """
+    Count orders grouped by status.
+
+    Used by the Prometheus custom collector in main.py to expose
+    `jewellery_orders_by_status{status}` at scrape time. Computing from the
+    DB (instead of an in-process counter) keeps the gauge accurate whether
+    an order's state was changed via the REST API or the gRPC service, since
+    both share this SQLite source of truth.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM orders GROUP BY status;"
+        )
+        rows = cursor.fetchall()
+    counts = {row["status"]: int(row["n"]) for row in rows}
+    # Ensure the full bounded label set is always emitted (even at 0).
+    for status in ("pending", "cancelled", "fulfilled"):
+        counts.setdefault(status, 0)
+    return counts
+
+
 def cancel_order(
     order_id: str,
     reason: str = "customer_request",

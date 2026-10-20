@@ -11,7 +11,7 @@ Built with **FastAPI**, **gRPC**, **SQLite**, **Prometheus**, **Grafana**, **Fil
 | Service | URL / Port | Description & Purpose |
 |---|---|---|
 | **Cristaux Jewellery App & Storefront** | http://localhost:8000 | Interactive Haute Joaillerie E-commerce Storefront & REST APIs (Part A) |
-| **gRPC Order Service (Part B)** | grpc://localhost:50051 | Standalone gRPC `OrderService` (`CancelOrder` / `GetOrder`) sharing the same SQLite source of truth & business rules as the REST API |
+| **gRPC Order Service (Part B)** | grpc://localhost:50051 · http://localhost:50052/metrics | Standalone gRPC `OrderService` (`CancelOrder` / `GetOrder`) sharing the same SQLite source of truth & business rules as the REST API; `/metrics` for Prometheus (Part C) |
 | **Prometheus Metrics Target** | http://localhost:8000/metrics | Scrape endpoint exposing all 4 Prometheus metric types (Assignment 1) |
 | **Prometheus Server** | http://localhost:9090 | Telemetry time-series database scraping metrics every 15s |
 | **Grafana Dashboards** | http://localhost:3000 | Pre-provisioned visual charts (Login: `admin` / `admin`) |
@@ -273,6 +273,13 @@ Both transports bind to the **same source of truth** (the SQLite database in `da
 | `test_grpc_vs_http.py` | Dual-protocol comparison suite (success + 2 failures through both versions) |
 | `filebeat/filebeat.yml` | Updated to ship `grpc-service` logs to Kibana alongside `app` |
 
+**Code generation command** (regenerates `proto/order_service_pb2.py` and `proto/order_service_pb2_grpc.py` from the `.proto`; run from the project root with `grpcio-tools` installed):
+```bash
+py -3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/order_service.proto
+```
+
+> Reference: the gRPC server/client structure follows the course **gRPC workshop** (week 1 Midnight Launch). No third-party code was copied; only the standard `grpcio` / `grpcio-tools` patterns were reused.
+
 ### How to Run
 
 **1. Docker (both services + observability stack):**
@@ -422,6 +429,99 @@ Example gRPC server log line (identical schema to the REST app):
 ```json
 {"@timestamp":"2026-10-18T05:33:56.975Z","service":"Cristaux Jewellery gRPC Service","level":"INFO","message":"gRPC CancelOrder succeeded","request_id":"trace-grpc-e6eb441f","rpc":"CancelOrder","order_id":"ord-grpc-succ-bb67e2","status_code":"OK","duration_ms":17.31}
 ```
+
+---
+
+## Part C: Extend the Metrics (30 marks)
+
+### 1. A1 Metrics Audit
+
+**Useful (kept as-is):**
+
+| Metric | Type | Why it stays |
+|---|---|---|
+| `jewellery_orders_placed_total{category}` | Counter | Orders placed by product category |
+| `jewellery_orders_cancelled_total{reason}` | Counter | Cancellations by reason |
+| `jewellery_pending_orders_count` | Gauge | Queue depth for fulfilment |
+| `jewellery_active_carts_count` | Gauge | Active shopping carts |
+| `http_request_duration_seconds{method,path,status}` | Histogram | HTTP latency by route + status |
+| `jewellery_order_processing_seconds` | Summary | Checkout processing time |
+
+**Missing / fixed:**
+
+| Issue | Finding | Fix / addition |
+|---|---|---|
+| gRPC service had **no metrics at all** | Prometheus could not scrape Part B | Added `/metrics` on port 50052 + 3 new metrics (below); added a `grpc-service` scrape job |
+| No error-rate by method/status | Derivable from a call counter | `grpc_calls_total{rpc_method,status}` — error rate = `rate(...{status!="OK"})`, so no separate error counter is needed |
+| No concurrency metric | No visibility into in-flight work | Added `grpc_in_flight_calls{rpc_method}` |
+| Only `pending` tracked as a gauge | No order-state distribution | Added `jewellery_orders_by_status{status}` (missing project metric) computed from the shared DB |
+| `http_request_duration_seconds` used **raw `request.url.path`** as a label | Embedded the real `order_id`/`cart_id`/`product_id` → unbounded cardinality (the brief warns against this) | `normalize_path()` now uses the route template (`/api/v1/orders/{order_id}`), so the `path` label set stays bounded |
+| `jewellery_orders_cancelled_total{reason}` | `reason` is a customer-provided string (semi-unbounded) | Flagged; kept for A1 dashboard compatibility. In practice it stays small; would normalize to a reason enum if it grew |
+
+`demo_requests_total{request_id}` from A1's Part E cardinality experiment is intentionally unbounded — it is the *example* of the anti-pattern, not a metric to fix.
+
+### 2. New Metrics
+
+| Metric | Purpose | Type | Unit | Labels (bounded) | Code location | Client or server? | Example query |
+|---|---|---|---|---|---|---|---|
+| `grpc_calls_total` | Calls and error rate by RPC method and status | Counter | calls | `rpc_method` ∈ {CancelOrder, GetOrder}, `status` ∈ {OK, NOT_FOUND, FAILED_PRECONDITION, …} | `grpc_server.py` (`record_rpc`) | — | `sum by (rpc_method, status) (rate(grpc_calls_total[5m]))` |
+| `grpc_request_duration_seconds` | Handler latency for p50/p95 | Histogram | seconds | `rpc_method`, `status` | `grpc_server.py` (`record_rpc`) | **Server** (handler wraps call with `perf_counter`) | `histogram_quantile(0.95, sum by (le, rpc_method) (rate(grpc_request_duration_seconds_bucket[5m])))` |
+| `grpc_in_flight_calls` | Concurrency / stuck handlers | Gauge | calls | `rpc_method` | `grpc_server.py` (handler `inc`/`dec` in `finally`) | — | `grpc_in_flight_calls` |
+| `jewellery_orders_by_status` | Order-state distribution (missing A1 metric) | Gauge | orders | `status` ∈ {pending, cancelled, fulfilled} | `app/main.py` (`OrderStatusCollector`) + `app/orders_repository.count_orders_by_status` | — | `jewellery_orders_by_status` |
+
+**Duration is measured at the server** for both transports: the gRPC handler and the FastAPI middleware each wrap the call with `time.perf_counter()`. No client-side timing is used for these metrics.
+
+**In-flight vs message size:** I chose **in-flight calls**. The operations are unary RPCs with small, fixed-size protobuf payloads (a few hundred bytes), so message size is near-constant and uninformative; in-flight calls reveal concurrency and stuck/slow handlers, which is the more useful signal.
+
+**Bounded labels:** all label sets are small and fixed. `request_id` / `x-request-id` / trace IDs are **never** used as labels — they stay only in the structured JSON log lines (where high cardinality is fine) and in the gRPC trailing metadata for correlation.
+
+### 3. Run the Repeatable Traffic
+
+Start both services, then generate a bounded mix of success + failure gRPC calls to populate the panels:
+
+```bash
+# Terminal 1 - REST API   (HTTP operation side)
+py -3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+# Terminal 2 - gRPC server (serves RPC on 50051 + /metrics on 50052)
+py -3 grpc_server.py
+
+# Terminal 3 - repeatable gRPC traffic (10 rounds x 5 RPCs = ~50 calls)
+py -3 grpc_seed_traffic.py --rounds 10 --sleep 0.1
+```
+
+`grpc_seed_traffic.py` produces a bounded status mix — `OK` (cancel a freshly-seeded order / GetOrder on an existing one), `NOT_FOUND` (non-existent order), `FAILED_PRECONDITION` (re-cancelling an already-cancelled order) — so the calls-by-status and error-rate panels have data for every status.
+
+For the HTTP operation side, the existing `seed_traffic.py` already drives `PATCH /api/v1/orders/{order_id}` cancels/fulfils, which populate `http_request_duration_seconds` for the comparison panels.
+
+### 4. Grafana Dashboard
+
+A new dashboard **"Cristaux - Part C: gRPC vs HTTP Operation Metrics"** is provisioned at `grafana/provisioning/dashboards/part_c_grpc_dashboard.json` (auto-loaded by Grafana). It shows gRPC metrics **beside** the HTTP cancel operation (`PATCH /api/v1/orders/{order_id}`):
+
+| Panel | gRPC | HTTP (same operation) |
+|---|---|---|
+| Calls by method & status | `sum by (rpc_method, status) (rate(grpc_calls_total[5m]))` | `sum by (status) (rate(http_request_duration_seconds_count{method="PATCH",path="/api/v1/orders/{order_id}"}[5m]))` |
+| Error rate | `sum by (rpc_method) (rate(grpc_calls_total{status!="OK"}[5m]))` | `sum (rate(http_request_duration_seconds_count{...,status!~"2.."}[5m]))` |
+| Duration p50 & p95 (5m) | `histogram_quantile(0.50/0.95, sum by (le, rpc_method) (rate(grpc_request_duration_seconds_bucket[5m])))` | `histogram_quantile(0.50/0.95, sum by (le) (rate(http_request_duration_seconds_bucket{method="PATCH",...}[5m])))` |
+| In-flight calls | `grpc_in_flight_calls` | — |
+| Orders by status (missing A1 metric) | `jewellery_orders_by_status` | — |
+
+All time windows are **5 minutes** (`[5m]`), shown in each panel title/description. Duration panels are server-side for both transports. Open it at http://localhost:3000 → Dashboards → *Cristaux - Part C: gRPC vs HTTP Operation Metrics*.
+
+### 5. Dashboard Evidence
+
+Run the stack and both seed scripts to populate the panels, then capture screenshots for the submission:
+```bash
+docker compose up -d --build
+py -3 seed_traffic.py            # HTTP operation traffic
+py -3 grpc_seed_traffic.py       # gRPC operation traffic (OK / NOT_FOUND / FAILED_PRECONDITION)
+```
+
+**Part C dashboard — "Cristaux - Part C: gRPC vs HTTP Operation Metrics"** (gRPC metrics beside the HTTP operation) — screenshots in `REPORT.docx` / `REPORT.pdf`.
+
+**A1 dashboard — "Jewellery Store Observability Dashboard"** (kept from Assignment 1, still scraped) — screenshots in `REPORT.docx` / `REPORT.pdf`.
+
+> Keep the `data/` volume and Docker volumes out of the submission (already in `.gitignore`).
 
 ---
 

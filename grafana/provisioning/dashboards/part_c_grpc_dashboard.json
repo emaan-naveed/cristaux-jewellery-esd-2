@@ -1,0 +1,177 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "gRPC Calls by RPC Method & Status (5m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": "Prometheus",
+      "description": "Calls and error composition for the gRPC OrderService. grpc_calls_total{rpc_method,status}. Error rate derivable from the same counter (status != OK). Labels bounded: rpc_method in {CancelOrder, GetOrder}; status in {OK, NOT_FOUND, FAILED_PRECONDITION, ...}.",
+      "targets": [
+        {
+          "expr": "sum by (rpc_method, status) (rate(grpc_calls_total[5m]))",
+          "legendFormat": "{{rpc_method}} / {{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "req/s" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "HTTP Cancel Calls by Status - PATCH /api/v1/orders/{order_id} (5m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": "Prometheus",
+      "description": "Same operation through the HTTP transport. Count by status comes from the existing http_request_duration_seconds histogram (its _count series), filtered to the cancel endpoint. Path label is now the route template (bounded) after the Part C fix.",
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(http_request_duration_seconds_count{method=\"PATCH\",path=\"/api/v1/orders/{order_id}\"}[5m]))",
+          "legendFormat": "HTTP {{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "req/s" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "gRPC Error Rate by RPC Method (status != OK, 5m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": "Prometheus",
+      "description": "Error rate = rate of grpc_calls_total where status is not OK. Derived from the call counter, so no separate error counter is needed.",
+      "targets": [
+        {
+          "expr": "sum by (rpc_method) (rate(grpc_calls_total{status!=\"OK\"}[5m]))",
+          "legendFormat": "{{rpc_method}} error rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "req/s" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "HTTP Cancel Error Rate (non-2xx, 5m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": "Prometheus",
+      "description": "Error rate for the HTTP cancel operation = rate of histogram _count where status is not 2xx.",
+      "targets": [
+        {
+          "expr": "sum (rate(http_request_duration_seconds_count{method=\"PATCH\",path=\"/api/v1/orders/{order_id}\",status!~\"2..\"}[5m]))",
+          "legendFormat": "HTTP cancel error rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "req/s" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "gRPC Handler Duration p50 & p95 (5m window, server-side)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": "Prometheus",
+      "description": "Duration measured at the SERVER (the handler wraps the call with perf_counter). p50 and p95 over a 5m window, grouped by rpc_method.",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, rpc_method) (rate(grpc_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{rpc_method}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, rpc_method) (rate(grpc_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{rpc_method}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "HTTP PATCH Duration p50 & p95 (5m window, server-side)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": "Prometheus",
+      "description": "Same cancel operation through HTTP. Duration measured at the SERVER (FastAPI middleware) over a 5m window.",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{method=\"PATCH\",path=\"/api/v1/orders/{order_id}\"}[5m])))",
+          "legendFormat": "p50 HTTP PATCH",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{method=\"PATCH\",path=\"/api/v1/orders/{order_id}\"}[5m])))",
+          "legendFormat": "p95 HTTP PATCH",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "gRPC In-Flight Calls by RPC Method",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": "Prometheus",
+      "description": "In-flight chosen OVER message size: these are unary RPCs with small, fixed-size protobuf payloads (~hundreds of bytes), so message size is near-constant and uninformative; in-flight calls reveal concurrency and stuck handlers. Gauge returns to 0 between calls.",
+      "targets": [
+        {
+          "expr": "grpc_in_flight_calls",
+          "legendFormat": "{{rpc_method}} in-flight",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Orders by Status (missing A1 metric)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": "Prometheus",
+      "description": "Identified gap in A1: only pending count was tracked. jewellery_orders_by_status{status} is computed from the shared SQLite DB at scrape time, so it stays accurate whether an order was cancelled via REST or via the gRPC service. Bounded label set: pending / cancelled / fulfilled.",
+      "targets": [
+        {
+          "expr": "jewellery_orders_by_status",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "horizontal",
+        "textMode": "value_and_name"
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["observability", "jewellery", "grpc", "part-c"],
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "Cristaux - Part C: gRPC vs HTTP Operation Metrics",
+  "uid": "cristaux-part-c-grpc"
+}
