@@ -260,6 +260,8 @@ Part B extracts the **order cancellation** operation (`CancelOrder`) from the RE
 
 Both transports bind to the **same source of truth** (the SQLite database in `data/cristaux_orders.db`) and the **same business rules** via the shared module `app/orders_repository.py`. The gRPC servicer calls `db_cancel_order(...)` directly — it is **not** an HTTP wrapper around the old endpoint, so the two paths stay independent while remaining consistent.
 
+**SQLite journal mode:** the database runs in the default rollback-journal mode (`journal_mode=DELETE`) rather than WAL. WAL needs a shared-memory file that is unreliable when the database is bind-mounted into Docker containers on Windows, and the REST and gRPC containers share the same database file.
+
 ### New / Changed Files
 
 | File | Purpose |
@@ -300,7 +302,7 @@ py -3 grpc_server.py
 # Terminal 3 - gRPC client (accepts input, sets deadline, reports results/errors)
 py -3 grpc_client.py --order-id ord-12345678 --reason customer_changed_mind --deadline 3
 py -3 grpc_client.py --order-id ord-ghost-99999999 --deadline 3          # NOT_FOUND
-py -3 grpc_client.py --order-id ord-12345678 --deadline 0.001            # DEADLINE_EXCEEDED
+py -3 grpc_client.py --deadline 0.001 --host 127.0.0.1:50051             # DEADLINE_EXCEEDED
 py -3 grpc_client.py --get --order-id ord-12345678                      # GetOrder
 ```
 
@@ -320,7 +322,7 @@ Python client (requests.Session)
    v
 FastAPI middleware  (app/main.py: observability_middleware)
    - generates / propagates x-request-id
-   - records http_request_duration_seconds histogram
+   - records http_request_duration_seconds histogram (server-side)
    - emits structured JSON log: {request_id, status_code, duration_ms}
    v
 update_order_status_v1()  ->  db_cancel_order(order_id, reason)
@@ -328,7 +330,7 @@ update_order_status_v1()  ->  db_cancel_order(order_id, reason)
 app/orders_repository.py   (shared business rules)
    - returns NOT_FOUND | ALREADY_CANCELLED | ALREADY_FULFILLED | SUCCESS
    v
-SQLite  (data/cristaux_orders.db, WAL mode)   <-- shared source of truth
+SQLite  (data/cristaux_orders.db, rollback journal)   <-- shared source of truth
    v
 HTTP 200 OK  |  404 Not Found  |  409 Conflict     (response carries x-request-id header)
    v
@@ -354,7 +356,7 @@ OrderServiceServicer.CancelOrder(request, context)   <-- SERVER HANDLER
    v
 app/orders_repository.py   (shared business rules)   <-- SAME module as REST
    v
-SQLite  (data/cristaux_orders.db, WAL mode)   <-- SAME source of truth
+SQLite  (data/cristaux_orders.db, rollback journal)   <-- SAME source of truth
    v
 CancelOrderResponse  OR  context.abort(StatusCode.NOT_FOUND / FAILED_PRECONDITION)
    + context.set_trailing_metadata(('x-request-id', request_id))
@@ -400,11 +402,10 @@ HTTP signals a state conflict with `409`; gRPC uses `FAILED_PRECONDITION (9)` be
 
 **4. Failed request — client deadline exceeded (gRPC only)**
 ```
-py -3 grpc_client.py --order-id ord-ghost-99999999 --deadline 0.001 --host 127.0.0.1:50052
-  gRPC Status: DEADLINE_EXCEEDED (4)
-  [Diagnosis]: Server failed to respond within the 0.001s deadline.
+py -3 grpc_client.py --deadline 0.001 --host 127.0.0.1:50051
+  gRPC Status: DEADLINE_EXCEEDED (4)   (HTTP equivalent: 408 / 504)
 ```
-With `--deadline 0.001` against an unreachable port the client surfaces `DEADLINE_EXCEEDED (4)`; the HTTP equivalent is `408 Request Timeout` / `504 Gateway Timeout`.
+With a 1 ms client deadline the call cannot complete in time, so the client surfaces `DEADLINE_EXCEEDED (4)`; the HTTP equivalent is `408 Request Timeout` / `504 Gateway Timeout`.
 
 **Status code mapping:**
 
@@ -422,12 +423,14 @@ A1 structured logging is preserved on the gRPC side and correlated across the bo
 
 1. The gRPC client generates a `request_id` (UUID) and sends it as gRPC call metadata `('x-request-id', req_id)`.
 2. The server's `extract_request_id(context)` reads it from `context.invocation_metadata()` and writes it into every structured JSON log line (`request_id`, `rpc`, `order_id`, `status_code`, `duration_ms`) — same schema as the FastAPI middleware logs.
-3. The server echoes the id back with `context.set_trailing_metadata(('x-request-id', request_id))`, so the client can correlate its own records with the server-side logs.
+3. On successful calls the server echoes the id back with `context.set_trailing_metadata(('x-request-id', request_id))` (aborted calls carry it in the logs only), so the client can correlate its own records with the server-side logs.
 4. Filebeat's `decode_json_fields` lifts `request_id` to a top-level field for both the `app` and `grpc-service` containers, so in Kibana you can filter by a single `request_id` and see both the HTTP leg and the gRPC leg of the same logical operation in one view.
 
-Example gRPC server log line (identical schema to the REST app):
+Example gRPC server log lines (identical schema to the REST app), as emitted by `docker logs grpc-service`:
 ```json
-{"@timestamp":"2026-10-18T05:33:56.975Z","service":"Cristaux Jewellery gRPC Service","level":"INFO","message":"gRPC CancelOrder succeeded","request_id":"trace-grpc-e6eb441f","rpc":"CancelOrder","order_id":"ord-grpc-succ-bb67e2","status_code":"OK","duration_ms":17.31}
+{"@timestamp": "2026-11-01T07:50:57.971Z", "service": "Cristaux Jewellery gRPC Service", "level": "INFO", "message": "gRPC CancelOrder succeeded", "request_id": "seed-20-5fa8f405", "rpc": "CancelOrder", "order_id": "ord-seed-c585d9", "status_code": "OK", "duration_ms": 91.56}
+{"@timestamp": "2026-11-01T07:50:57.982Z", "service": "Cristaux Jewellery gRPC Service", "level": "WARNING", "message": "gRPC CancelOrder failed: order not found", "request_id": "seed-20-5fa8f405", "rpc": "CancelOrder", "order_id": "ord-ghost-99999999", "status_code": "NOT_FOUND", "duration_ms": 7.76}
+{"@timestamp": "2026-11-01T07:50:57.991Z", "service": "Cristaux Jewellery gRPC Service", "level": "WARNING", "message": "gRPC CancelOrder failed: order already cancelled", "request_id": "seed-20-5fa8f405", "rpc": "CancelOrder", "order_id": "ord-seed-c585d9", "status_code": "FAILED_PRECONDITION", "duration_ms": 5.73}
 ```
 
 ---
@@ -465,13 +468,15 @@ Example gRPC server log line (identical schema to the REST app):
 | Metric | Purpose | Type | Unit | Labels (bounded) | Code location | Client or server? | Example query |
 |---|---|---|---|---|---|---|---|
 | `grpc_calls_total` | Calls and error rate by RPC method and status | Counter | calls | `rpc_method` ∈ {CancelOrder, GetOrder}, `status` ∈ {OK, NOT_FOUND, FAILED_PRECONDITION, …} | `grpc_server.py` (`record_rpc`) | — | `sum by (rpc_method, status) (rate(grpc_calls_total[5m]))` |
-| `grpc_request_duration_seconds` | Handler latency for p50/p95 | Histogram | seconds | `rpc_method`, `status` | `grpc_server.py` (`record_rpc`) | **Server** (handler wraps call with `perf_counter`) | `histogram_quantile(0.95, sum by (le, rpc_method) (rate(grpc_request_duration_seconds_bucket[5m])))` |
+| `grpc_request_duration_seconds` | Handler latency for p50/p95 (buckets 5 ms – 2.5 s: 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5) | Histogram | seconds | `rpc_method`, `status` | `grpc_server.py` (`record_rpc`) | **Server** (handler wraps call with `perf_counter`) | `histogram_quantile(0.95, sum by (le, rpc_method) (rate(grpc_request_duration_seconds_bucket[5m])))` |
 | `grpc_in_flight_calls` | Concurrency / stuck handlers | Gauge | calls | `rpc_method` | `grpc_server.py` (handler `inc`/`dec` in `finally`) | — | `grpc_in_flight_calls` |
 | `jewellery_orders_by_status` | Order-state distribution (missing A1 metric) | Gauge | orders | `status` ∈ {pending, cancelled, fulfilled} | `app/main.py` (`OrderStatusCollector`) + `app/orders_repository.count_orders_by_status` | — | `jewellery_orders_by_status` |
 
 **Duration is measured at the server** for both transports: the gRPC handler and the FastAPI middleware each wrap the call with `time.perf_counter()`. No client-side timing is used for these metrics.
 
 **In-flight vs message size:** I chose **in-flight calls**. The operations are unary RPCs with small, fixed-size protobuf payloads (a few hundred bytes), so message size is near-constant and uninformative; in-flight calls reveal concurrency and stuck/slow handlers, which is the more useful signal.
+
+**Note on `DEADLINE_EXCEEDED`:** it is raised on the client, so it never appears in `grpc_calls_total` (the server only counts calls whose handler ran).
 
 **Bounded labels:** all label sets are small and fixed. `request_id` / `x-request-id` / trace IDs are **never** used as labels — they stay only in the structured JSON log lines (where high cardinality is fine) and in the gRPC trailing metadata for correlation.
 
@@ -517,9 +522,9 @@ py -3 seed_traffic.py            # HTTP operation traffic
 py -3 grpc_seed_traffic.py       # gRPC operation traffic (OK / NOT_FOUND / FAILED_PRECONDITION)
 ```
 
-**Part C dashboard — "Cristaux - Part C: gRPC vs HTTP Operation Metrics"** (gRPC metrics beside the HTTP operation) — screenshots in `REPORT.docx` / `REPORT.pdf`.
+**Part C dashboard — "Cristaux - Part C: gRPC vs HTTP Operation Metrics"** (gRPC metrics beside the HTTP operation) — screenshots in `REPORT_Assignment_2_final.docx`.
 
-**A1 dashboard — "Jewellery Store Observability Dashboard"** (kept from Assignment 1, still scraped) — screenshots in `REPORT.docx` / `REPORT.pdf`.
+**A1 dashboard — "Jewellery Store Observability Dashboard"** (kept from Assignment 1, still scraped) — screenshots in `REPORT_Assignment_2_final.docx`.
 
 > Keep the `data/` volume and Docker volumes out of the submission (already in `.gitignore`).
 
